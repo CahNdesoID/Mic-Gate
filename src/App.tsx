@@ -288,6 +288,7 @@ const useWebRTCTalk = () => {
       console.log('[WebRTC] PTT connected to', info.src)
     } catch (err) {
       console.error('[WebRTC] PTT failed:', err)
+      alert('PTT Error: ' + err)
       pcRef.current?.close()
       pcRef.current = null
     }
