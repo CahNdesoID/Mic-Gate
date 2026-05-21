@@ -226,86 +226,55 @@ const useHlsAudio = (url) => {
 // ════ SECTION 6: WEBRTC PUSH-TO-TALK HOOK ═══════════════════════
 // Sends microphone audio TO the camera via go2rtc WebRTC endpoint.
 // go2rtc then forwards the audio to the camera via RTSP backchannel.
+  
 const useWebRTCTalk = () => {
-  const pcRef = useRef(null)
+  const pcRef      = useRef(null)
+  const activeRef  = useRef(false)
 
-  // Extract go2rtc base URL + stream name from HLS URL
   const parseGo2rtc = (hlsUrl) => {
     try {
-      const u   = new URL(hlsUrl)
-      const base = `${u.protocol}//${u.host}`
-      const src  = u.searchParams.get('src') || 'stream'
-      return { base, src }
+      const u = new URL(hlsUrl)
+      return { base: `${u.protocol}//${u.host}`, src: u.searchParams.get('src') || 'stream' }
     } catch { return null }
   }
 
   const startTalk = useCallback(async (hlsUrl, micStream) => {
     const info = parseGo2rtc(hlsUrl)
     if (!info || !micStream) return
+    activeRef.current = true
+    pcRef.current?.close()
 
     try {
-      // Close any existing connection
-      pcRef.current?.close()
-
       const pc = new RTCPeerConnection({ iceServers: [] })
       pcRef.current = pc
-
-      // Add microphone audio tracks
-      micStream.getAudioTracks().forEach(track => {
-        pc.addTrack(track, micStream)
-      })
-
-      // Create SDP offer (audio-only transmit)
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: false,
-        offerToReceiveVideo: false,
-      })
+      micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream))
+      const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false })
       await pc.setLocalDescription(offer)
-
-      // Wait for ICE gathering (max 3 seconds)
-      await new Promise((resolve) => {
-        if (pc.iceGatheringState === 'complete') { resolve(); return }
-        const check = () => {
-          if (pc.iceGatheringState === 'complete') resolve()
-        }
-        pc.addEventListener('icegatheringstatechange', check)
-        setTimeout(resolve, 500)
-      })
-
-      // POST SDP offer to go2rtc WebRTC endpoint
-      const endpoint = `${info.base}/api/webrtc?src=${info.src}`
-      const res = await fetch(endpoint, {
-        method:  'POST',
+      await new Promise(r => { setTimeout(r, 1000) })
+      if (!activeRef.current || pc.signalingState === 'closed') return
+      const res = await fetch(`${info.base}/api/webrtc?src=${info.src}`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/sdp' },
-        body:    pc.localDescription.sdp,
+        body: pc.localDescription.sdp,
       })
-
-      if (!res.ok) throw new Error(`go2rtc returned HTTP ${res.status}`)
-
-      const answerSdp = await res.text()
-      if (pcRef.current && pc.signalingState !== 'closed') {
-        await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp })
-        console.log('[WebRTC] PTT connected!')
-      }
-
-      console.log('[WebRTC] PTT connected to', info.src)
-    } catch (err) {
-      console.error('[WebRTC] PTT failed:', err)
-      alert('PTT Error: ' + err)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const sdp = await res.text()
+      if (!activeRef.current || pc.signalingState === 'closed') return
+      await pc.setRemoteDescription({ type: 'answer', sdp })
+      console.log('[PTT] connected!')
+    } catch (e) {
+      console.error('[PTT] error:', e)
       pcRef.current?.close()
       pcRef.current = null
     }
   }, [])
 
-
   const stopTalk = useCallback(() => {
-    setTimeout(() => {
-      pcRef.current?.close()
-      pcRef.current = null
-    }, 2000)
+    activeRef.current = false
+    setTimeout(() => { pcRef.current?.close(); pcRef.current = null }, 3000)
   }, [])
-  useEffect(() => () => { pcRef.current?.close() }, [])
 
+  useEffect(() => () => { activeRef.current = false; pcRef.current?.close() }, [])
   return { startTalk, stopTalk }
 }
 
