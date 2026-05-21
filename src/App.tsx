@@ -276,7 +276,7 @@ const useWebRTCTalk = () => {
       const endpoint = `${info.base}/api/webrtc?src=${info.src}`
       const res = await fetch(endpoint, {
         method:  'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: { 'Content-Type': 'application/sdp' },
         body:    pc.localDescription.sdp,
       })
 
