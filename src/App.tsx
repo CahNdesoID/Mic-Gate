@@ -269,7 +269,7 @@ const useWebRTCTalk = () => {
           if (pc.iceGatheringState === 'complete') resolve()
         }
         pc.addEventListener('icegatheringstatechange', check)
-        setTimeout(resolve, 3000)
+        setTimeout(resolve, 500)
       })
 
       // POST SDP offer to go2rtc WebRTC endpoint
