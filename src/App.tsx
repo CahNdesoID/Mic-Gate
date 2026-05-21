@@ -283,7 +283,10 @@ const useWebRTCTalk = () => {
       if (!res.ok) throw new Error(`go2rtc returned HTTP ${res.status}`)
 
       const answerSdp = await res.text()
-      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp })
+      if (pcRef.current && pc.signalingState !== 'closed') {
+        await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp })
+        console.log('[WebRTC] PTT connected!')
+      }
 
       console.log('[WebRTC] PTT connected to', info.src)
     } catch (err) {
