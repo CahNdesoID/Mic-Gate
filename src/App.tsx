@@ -145,7 +145,7 @@ const useWebRTCTalk = () => {
     pcRef.current=pc
     try{
       micStream.getAudioTracks().forEach(t=>pc.addTrack(t,micStream))
-      const offer=await pc.createOffer({offerToReceiveAudio:false,offerToReceiveVideo:false})
+      const offer=await pc.createOffer({offerToReceiveAudio:true,offerToReceiveVideo:false})
       await pc.setLocalDescription(offer)
       await new Promise(resolve=>{
         if(pc.iceGatheringState==='complete'){resolve();return}
