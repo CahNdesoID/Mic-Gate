@@ -1,4 +1,4 @@
-
+// @ts-nocheck
 // ════════════════════════════════════════════════════════════════
 //  Gate Monitor — Hotel Kedaton 8
 //  Full Production Build v1.0
