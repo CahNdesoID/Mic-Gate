@@ -294,12 +294,13 @@ const useWebRTCTalk = () => {
     }
   }, [])
 
-  const stopTalk = useCallback(() => {
-    pcRef.current?.close()
-    pcRef.current = null
-    console.log('[WebRTC] PTT stopped')
-  }, [])
 
+  const stopTalk = useCallback(() => {
+    setTimeout(() => {
+      pcRef.current?.close()
+      pcRef.current = null
+    }, 2000)
+  }, [])
   useEffect(() => () => { pcRef.current?.close() }, [])
 
   return { startTalk, stopTalk }
