@@ -104,62 +104,68 @@ const useHlsAudio = (url) => {
       const ctx=new(window.AudioContext||window.webkitAudioContext)()
       const src=ctx.createMediaElementSource(audio)
 
-      // High-pass: potong dengung & hum di bawah 80Hz
-      const highPass=ctx.createBiquadFilter()
-      highPass.type='highpass'
-      highPass.frequency.value=80
-      highPass.Q.value=0.7
-
-      // Low-pass: potong kresek & noise di atas 6000Hz
-      const lowPass=ctx.createBiquadFilter()
-      lowPass.type='lowpass'
-      lowPass.frequency.value=6000
-      lowPass.Q.value=0.7
-
-      // Notch filter: potong dengung 50Hz (frekuensi PLN Indonesia)
+      // Notch 50Hz — dengung PLN Indonesia
       const notch=ctx.createBiquadFilter()
       notch.type='notch'
       notch.frequency.value=50
-      notch.Q.value=10
+      notch.Q.value=15
 
-      // Mid boost: angkat frekuensi vokal 1kHz-4kHz biar lebih jelas
-      const midBoost=ctx.createBiquadFilter()
-      midBoost.type='peaking'
-      midBoost.frequency.value=2500
-      midBoost.gain.value=6
-      midBoost.Q.value=1.2
+      // Notch 100Hz — harmonik PLN
+      const notch2=ctx.createBiquadFilter()
+      notch2.type='notch'
+      notch2.frequency.value=100
+      notch2.Q.value=10
 
-      // Presence boost: angkat 4kHz-8kHz biar vokal makin crisp
-      const presence=ctx.createBiquadFilter()
-      presence.type='peaking'
-      presence.frequency.value=5000
-      presence.gain.value=3
-      presence.Q.value=1.5
+      // High-pass 300Hz — buang angin, AC, dengung, suara rendah non-vokal
+      const highPass=ctx.createBiquadFilter()
+      highPass.type='highpass'
+      highPass.frequency.value=300
+      highPass.Q.value=0.9
 
-      // DynamicsCompressor: normalize volume, reduce peaks & berdenging
+      // Low-pass 3400Hz — buang kresek, noise elektronik, suara tinggi non-vokal
+      const lowPass=ctx.createBiquadFilter()
+      lowPass.type='lowpass'
+      lowPass.frequency.value=3400
+      lowPass.Q.value=0.9
+
+      // Bandpass ketat — fokus frekuensi vokal manusia 300Hz-3400Hz (range telepon)
+      const bandpass=ctx.createBiquadFilter()
+      bandpass.type='bandpass'
+      bandpass.frequency.value=1200
+      bandpass.Q.value=0.8
+
+      // Voice boost 1800Hz — angkat kejelasan vokal
+      const voiceBoost=ctx.createBiquadFilter()
+      voiceBoost.type='peaking'
+      voiceBoost.frequency.value=1800
+      voiceBoost.gain.value=8
+      voiceBoost.Q.value=1.0
+
+      // Compressor agresif — suppress background noise, normalize volume
       const comp=ctx.createDynamicsCompressor()
-      comp.threshold.value=-24
-      comp.knee.value=10
-      comp.ratio.value=4
-      comp.attack.value=0.003
-      comp.release.value=0.15
+      comp.threshold.value=-30
+      comp.knee.value=6
+      comp.ratio.value=8
+      comp.attack.value=0.001
+      comp.release.value=0.1
 
-      // Gain: overall boost
+      // Gain
       const gain=ctx.createGain()
-      gain.gain.value=1.4
+      gain.gain.value=1.6
 
       // Analyser untuk oscilloscope
       const node=ctx.createAnalyser()
       node.fftSize=2048
       node.smoothingTimeConstant=0.82
 
-      // Chain: src → notch → highPass → lowPass → midBoost → presence → comp → gain → analyser → output
+      // Chain: src → notch50 → notch100 → highPass → lowPass → bandpass → voiceBoost → comp → gain → analyser → out
       src.connect(notch)
-      notch.connect(highPass)
+      notch.connect(notch2)
+      notch2.connect(highPass)
       highPass.connect(lowPass)
-      lowPass.connect(midBoost)
-      midBoost.connect(presence)
-      presence.connect(comp)
+      lowPass.connect(bandpass)
+      bandpass.connect(voiceBoost)
+      voiceBoost.connect(comp)
       comp.connect(gain)
       gain.connect(node)
       node.connect(ctx.destination)

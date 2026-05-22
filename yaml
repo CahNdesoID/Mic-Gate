@@ -1,0 +1,10 @@
+streams:
+  gate_kasir:
+    - "rtsp://admin:CJRHYV@192.168.1.42:554/"
+
+ffmpeg:
+  bin: "C:\\Users\\Administrator\\Downloads\\go2rtc_win64\\ffmpeg-8.0.1-essentials_build\\bin\\ffmpeg.exe"
+
+api:
+  listen: ":1984"
+  origin: "*"
