@@ -104,68 +104,74 @@ const useHlsAudio = (url) => {
       const ctx=new(window.AudioContext||window.webkitAudioContext)()
       const src=ctx.createMediaElementSource(audio)
 
-      // Notch 50Hz — dengung PLN Indonesia
+      // High-pass AGRESIF 450Hz — bunuh mesin mobil (80-400Hz) + hujan rumble
+      // Vokal manusia mulai dari 500Hz keatas, aman dipotong di 450Hz
+      const highPass=ctx.createBiquadFilter()
+      highPass.type='highpass'
+      highPass.frequency.value=450
+      highPass.Q.value=1.4
+
+      // High-pass kedua (cascade) — double cut mesin mobil, makin tajam
+      const highPass2=ctx.createBiquadFilter()
+      highPass2.type='highpass'
+      highPass2.frequency.value=450
+      highPass2.Q.value=1.4
+
+      // Low-pass 4000Hz — potong hujan deras (hiss di atas 4kHz)
+      const lowPass=ctx.createBiquadFilter()
+      lowPass.type='lowpass'
+      lowPass.frequency.value=4000
+      lowPass.Q.value=1.0
+
+      // Notch 50Hz — dengung PLN (backup, walau sudah di-highpass)
       const notch=ctx.createBiquadFilter()
       notch.type='notch'
       notch.frequency.value=50
       notch.Q.value=15
 
-      // Notch 100Hz — harmonik PLN
-      const notch2=ctx.createBiquadFilter()
-      notch2.type='notch'
-      notch2.frequency.value=100
-      notch2.Q.value=10
+      // SPEECH PRESENCE BOOST — 2500Hz-3500Hz = zona kejelasan vokal
+      // Ini yang bikin vokal "keluar" dan terdengar jelas
+      const presence=ctx.createBiquadFilter()
+      presence.type='peaking'
+      presence.frequency.value=3000
+      presence.gain.value=10
+      presence.Q.value=1.2
 
-      // High-pass 300Hz — buang angin, AC, dengung, suara rendah non-vokal
-      const highPass=ctx.createBiquadFilter()
-      highPass.type='highpass'
-      highPass.frequency.value=300
-      highPass.Q.value=0.9
+      // Boost vokal 1500Hz — body suara manusia
+      const voiceBody=ctx.createBiquadFilter()
+      voiceBody.type='peaking'
+      voiceBody.frequency.value=1500
+      voiceBody.gain.value=6
+      voiceBody.Q.value=1.0
 
-      // Low-pass 3400Hz — buang kresek, noise elektronik, suara tinggi non-vokal
-      const lowPass=ctx.createBiquadFilter()
-      lowPass.type='lowpass'
-      lowPass.frequency.value=3400
-      lowPass.Q.value=0.9
-
-      // Bandpass ketat — fokus frekuensi vokal manusia 300Hz-3400Hz (range telepon)
-      const bandpass=ctx.createBiquadFilter()
-      bandpass.type='bandpass'
-      bandpass.frequency.value=1200
-      bandpass.Q.value=0.8
-
-      // Voice boost 1800Hz — angkat kejelasan vokal
-      const voiceBoost=ctx.createBiquadFilter()
-      voiceBoost.type='peaking'
-      voiceBoost.frequency.value=1800
-      voiceBoost.gain.value=8
-      voiceBoost.Q.value=1.0
-
-      // Compressor agresif — suppress background noise, normalize volume
+      // Compressor sangat agresif — noise floor ditekan keras
+      // Saat sepi (noise): gain turun. Saat ada orang bicara: gain naik otomatis
       const comp=ctx.createDynamicsCompressor()
-      comp.threshold.value=-30
-      comp.knee.value=6
-      comp.ratio.value=8
+      comp.threshold.value=-35
+      comp.knee.value=4
+      comp.ratio.value=14
       comp.attack.value=0.001
-      comp.release.value=0.1
+      comp.release.value=0.08
 
-      // Gain
+      // Gain boost — kompensasi setelah banyak frekuensi dipotong
       const gain=ctx.createGain()
-      gain.gain.value=1.6
+      gain.gain.value=2.2
 
       // Analyser untuk oscilloscope
       const node=ctx.createAnalyser()
       node.fftSize=2048
       node.smoothingTimeConstant=0.82
 
-      // Chain: src → notch50 → notch100 → highPass → lowPass → bandpass → voiceBoost → comp → gain → analyser → out
+      // Chain:
+      // src → notch(50Hz) → HP(450Hz) → HP2(450Hz) → LP(4kHz)
+      //     → voiceBody(1.5kHz) → presence(3kHz) → comp → gain → analyser → out
       src.connect(notch)
-      notch.connect(notch2)
-      notch2.connect(highPass)
-      highPass.connect(lowPass)
-      lowPass.connect(bandpass)
-      bandpass.connect(voiceBoost)
-      voiceBoost.connect(comp)
+      notch.connect(highPass)
+      highPass.connect(highPass2)
+      highPass2.connect(lowPass)
+      lowPass.connect(voiceBody)
+      voiceBody.connect(presence)
+      presence.connect(comp)
       comp.connect(gain)
       gain.connect(node)
       node.connect(ctx.destination)
