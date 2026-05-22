@@ -310,7 +310,6 @@ const MicButton = ({active,onStart,onEnd,disabled,sz=48,iconSz=18}) => (
     {active&&<div style={{position:'absolute',top:'50%',left:'50%',width:sz,height:sz,borderRadius:'50%',background:'rgba(17,17,17,.13)',animation:'pulse-ring .9s ease-out infinite',pointerEvents:'none'}}/>}
     <button onMouseDown={onStart} onMouseUp={onEnd}
       onTouchStart={e=>{e.preventDefault();onStart()}} onTouchEnd={e=>{e.preventDefault();onEnd()}}
-      onMouseLeave={e=>{if(active)onEnd()}}
       disabled={disabled}
       style={{width:sz,height:sz,borderRadius:'50%',border:active?'none':`2px solid ${T.borderD}`,background:active?T.dark:T.surf,color:active?'#fff':T.mid,display:'flex',alignItems:'center',justifyContent:'center',cursor:disabled?'not-allowed':'pointer',transition:'all .15s',outline:'none',flexShrink:0,boxShadow:active?'0 4px 22px rgba(0,0,0,.28)':'0 1px 4px rgba(0,0,0,.08)',opacity:disabled?.35:1,WebkitTapHighlightColor:'transparent',userSelect:'none'}}>
       <Mic size={iconSz} strokeWidth={active?2.5:1.8}/>
