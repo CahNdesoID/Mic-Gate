@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 declare const Hls: any
 
-const ic = (d, opt) => (p) => (
+const ic = (d, opt?) => (p: any) => (
   <svg width={p.size||16} height={p.size||16} viewBox="0 0 24 24"
     fill="none" stroke={p.color||"currentColor"}
     strokeWidth={p.strokeWidth||2} strokeLinecap="round" strokeLinejoin="round"
@@ -23,6 +23,7 @@ const Tablet    = ic("M12 18h.01",{p2:"M5 2h14a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H5a
 const Smartphone= ic("M12 18h.01",{p2:"M5 2h14a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"})
 const RefreshCw = ic("M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15")
 const Maximize2 = ic("M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7")
+const Volume2   = ic("M11 5 6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07")
 
 // ── STYLES ──────────────────────────────────────────────────────
 const GlobalStyles = () => (
@@ -37,14 +38,15 @@ const GlobalStyles = () => (
     ::-webkit-scrollbar-track{background:transparent}
     ::-webkit-scrollbar-thumb{background:#CCCCCC;border-radius:99px}
     input,textarea{font-family:'Plus Jakarta Sans',sans-serif}
-    @keyframes pulse-ring{0%{transform:translate(-50%,-50%) scale(1);opacity:.55}100%{transform:translate(-50%,-50%) scale(2.2);opacity:0}}
     @keyframes live-blink{0%,100%{opacity:1}50%{opacity:.3}}
     @keyframes conn-blink{0%,100%{opacity:1}50%{opacity:.45}}
     @keyframes slide-up{from{transform:translateY(48px);opacity:0}to{transform:translateY(0);opacity:1}}
     @keyframes fade-bg{from{opacity:0}to{opacity:1}}
     @keyframes fade-in{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
-    @keyframes tx-dot{0%,100%{opacity:1}50%{opacity:.4}}
     @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes eq1{0%,100%{height:4px}50%{height:16px}}
+    @keyframes eq2{0%,100%{height:12px}50%{height:4px}}
+    @keyframes eq3{0%,100%{height:8px}50%{height:20px}}
   `}</style>
 )
 
@@ -69,7 +71,6 @@ const getVP = () => {
     cols:w<600?1:2,gap:w<600?12:w<1024?16:20,pad:w<600?14:w<1024?18:24,
     cardP:w<480?14:w<768?16:20,headFS:w<480?15:w<768?17:20,
     labelFS:w<480?13:w<768?14:16,metaFS:w<480?10:11,
-    micSz:w<480?54:48,micIcon:w<480?22:18,
     cardR:w<480?18:22,modalR:w<768?'20px 20px 0 0':'22px',
   }
 }
@@ -84,7 +85,7 @@ const useVP = () => {
   return vp
 }
 
-// ── HLS AUDIO HOOK ──────────────────────────────────────────────
+// ── HLS AUDIO HOOK WITH FILTERS ─────────────────────────────────
 const useHlsAudio = (url) => {
   const [streamStatus,setStreamStatus]=useState('idle')
   const [analyser,setAnalyser]=useState(null)
@@ -98,26 +99,87 @@ const useHlsAudio = (url) => {
     setAnalyser(null)
   },[])
 
+  const resumeCtx=(audio)=>{
+    try{
+      const ctx=new(window.AudioContext||window.webkitAudioContext)()
+      const src=ctx.createMediaElementSource(audio)
+
+      // High-pass: potong dengung & hum di bawah 80Hz
+      const highPass=ctx.createBiquadFilter()
+      highPass.type='highpass'
+      highPass.frequency.value=80
+      highPass.Q.value=0.7
+
+      // Low-pass: potong kresek & noise di atas 6000Hz
+      const lowPass=ctx.createBiquadFilter()
+      lowPass.type='lowpass'
+      lowPass.frequency.value=6000
+      lowPass.Q.value=0.7
+
+      // Notch filter: potong dengung 50Hz (frekuensi PLN Indonesia)
+      const notch=ctx.createBiquadFilter()
+      notch.type='notch'
+      notch.frequency.value=50
+      notch.Q.value=10
+
+      // Mid boost: angkat frekuensi vokal 1kHz-4kHz biar lebih jelas
+      const midBoost=ctx.createBiquadFilter()
+      midBoost.type='peaking'
+      midBoost.frequency.value=2500
+      midBoost.gain.value=6
+      midBoost.Q.value=1.2
+
+      // Presence boost: angkat 4kHz-8kHz biar vokal makin crisp
+      const presence=ctx.createBiquadFilter()
+      presence.type='peaking'
+      presence.frequency.value=5000
+      presence.gain.value=3
+      presence.Q.value=1.5
+
+      // DynamicsCompressor: normalize volume, reduce peaks & berdenging
+      const comp=ctx.createDynamicsCompressor()
+      comp.threshold.value=-24
+      comp.knee.value=10
+      comp.ratio.value=4
+      comp.attack.value=0.003
+      comp.release.value=0.15
+
+      // Gain: overall boost
+      const gain=ctx.createGain()
+      gain.gain.value=1.4
+
+      // Analyser untuk oscilloscope
+      const node=ctx.createAnalyser()
+      node.fftSize=2048
+      node.smoothingTimeConstant=0.82
+
+      // Chain: src → notch → highPass → lowPass → midBoost → presence → comp → gain → analyser → output
+      src.connect(notch)
+      notch.connect(highPass)
+      highPass.connect(lowPass)
+      lowPass.connect(midBoost)
+      midBoost.connect(presence)
+      presence.connect(comp)
+      comp.connect(gain)
+      gain.connect(node)
+      node.connect(ctx.destination)
+
+      audioCtxRef.current=ctx;setAnalyser(node)
+    }catch(e){console.warn('[HLS] AudioContext failed:',e)}
+  }
+
   const connect=useCallback(()=>{
     if(!url){setStreamStatus('idle');return}
     cleanup();setStreamStatus('connecting')
     const audio=new Audio();audio.crossOrigin='anonymous';audio.volume=1;audioRef.current=audio
-    const resumeCtx=()=>{
-      try{
-        const ctx=new(window.AudioContext||window.webkitAudioContext)()
-        const node=ctx.createAnalyser();node.fftSize=2048;node.smoothingTimeConstant=0.82
-        const src=ctx.createMediaElementSource(audio);src.connect(node);node.connect(ctx.destination)
-        audioCtxRef.current=ctx;setAnalyser(node)
-      }catch(e){console.warn('[HLS] AudioContext failed:',e)}
-    }
     if(Hls.isSupported()){
       const hls=new Hls({lowLatencyMode:true,backBufferLength:10,maxBufferLength:10,liveSyncDurationCount:2,enableWorker:true})
       hlsRef.current=hls;hls.loadSource(url);hls.attachMedia(audio)
-      hls.on(Hls.Events.MANIFEST_PARSED,()=>{resumeCtx();audio.play().catch(()=>{});setStreamStatus('live')})
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>{resumeCtx(audio);audio.play().catch(()=>{});setStreamStatus('live')})
       hls.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal){setStreamStatus('offline');retryRef.current=setTimeout(connect,5000)}})
     }else if(audio.canPlayType('application/vnd.apple.mpegurl')){
       audio.src=url
-      audio.addEventListener('loadedmetadata',()=>{resumeCtx();audio.play().catch(()=>{});setStreamStatus('live')},{once:true})
+      audio.addEventListener('loadedmetadata',()=>{resumeCtx(audio);audio.play().catch(()=>{});setStreamStatus('live')},{once:true})
       audio.addEventListener('error',()=>{setStreamStatus('offline');retryRef.current=setTimeout(connect,5000)},{once:true})
     }else{setStreamStatus('offline')}
   },[url,cleanup])
@@ -126,63 +188,10 @@ const useHlsAudio = (url) => {
   return{streamStatus,analyser,reconnect:connect}
 }
 
-// ── WEBRTC PUSH-TO-TALK HOOK ────────────────────────────────────
-const useWebRTCTalk = () => {
-  const pcRef=useRef(null)
-
-  const parseGo2rtc=(hlsUrl)=>{
-    try{
-      const u=new URL(hlsUrl)
-      return{base:`${u.protocol}//${u.host}`,src:u.searchParams.get('src')||'stream'}
-    }catch{return null}
-  }
-
-  const startTalk=useCallback(async(hlsUrl,micStream)=>{
-    const info=parseGo2rtc(hlsUrl)
-    if(!info||!micStream)return
-    pcRef.current?.close()
-    const pc=new RTCPeerConnection({iceServers:[]})
-    pcRef.current=pc
-    try{
-      micStream.getAudioTracks().forEach(t=>pc.addTrack(t,micStream))
-      const offer=await pc.createOffer({offerToReceiveAudio:true,offerToReceiveVideo:false})
-      await pc.setLocalDescription(offer)
-      await new Promise(resolve=>{
-        if(pc.iceGatheringState==='complete'){resolve();return}
-        pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete')resolve()})
-        setTimeout(resolve,300)
-      })
-      if(pc.signalingState==='closed')return
-      const res=await fetch(`${info.base}/api/webrtc?src=${info.src}`,{
-        method:'POST',
-        headers:{'Content-Type':'application/sdp'},
-        body:pc.localDescription.sdp,
-      })
-      if(!res.ok)throw new Error(`HTTP ${res.status}`)
-      const sdp=await res.text()
-      if(pc.signalingState!=='closed'){
-        await pc.setRemoteDescription({type:'answer',sdp})
-        console.log('[PTT] Connected!')
-      }
-    }catch(e){
-      console.error('[PTT] Failed:',e)
-      pc.close()
-      if(pcRef.current===pc)pcRef.current=null
-    }
-  },[])
-
-  const stopTalk=useCallback(()=>{
-    const pc=pcRef.current
-    if(pc)setTimeout(()=>{pc.close();if(pcRef.current===pc)pcRef.current=null},2000)
-  },[])
-
-  useEffect(()=>()=>{pcRef.current?.close()},[])
-  return{startTalk,stopTalk}
-}
-
 // ── SOUNDWAVE ───────────────────────────────────────────────────
-const SoundwaveArea = ({status,micActive,analyser}) => {
+const SoundwaveArea = ({status,analyser}) => {
   const canvasRef=useRef(null),animRef=useRef(null),tRef=useRef(0),sizeRef=useRef({w:0,h:0})
+
   useEffect(()=>{
     const canvas=canvasRef.current;if(!canvas)return
     const dpr=window.devicePixelRatio||1
@@ -193,6 +202,7 @@ const SoundwaveArea = ({status,micActive,analyser}) => {
     })
     ro.observe(canvas)
     const ctx=canvas.getContext('2d')
+
     const drawGrid=(W,H)=>{
       ctx.save();ctx.strokeStyle='rgba(255,255,255,0.045)';ctx.lineWidth=1
       for(let i=1;i<4;i++){ctx.beginPath();ctx.moveTo(0,H*i/4);ctx.lineTo(W,H*i/4);ctx.stroke()}
@@ -201,12 +211,14 @@ const SoundwaveArea = ({status,micActive,analyser}) => {
       ctx.setLineDash([4,6]);ctx.beginPath();ctx.moveTo(0,H/2);ctx.lineTo(W,H/2);ctx.stroke()
       ctx.setLineDash([]);ctx.restore()
     }
+
     const draw=()=>{
       const{w:W,h:H}=sizeRef.current
       if(!W||!H){animRef.current=requestAnimationFrame(draw);return}
       ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H)
       const cy=H/2,t=tRef.current
       drawGrid(W,H);ctx.save();ctx.lineCap='round';ctx.lineJoin='round'
+
       if(status==='offline'||status==='idle'||status==='connecting'){
         ctx.strokeStyle=status==='connecting'?'rgba(255,255,255,0.22)':'rgba(255,255,255,0.17)';ctx.lineWidth=1.5
         if(status==='connecting'){
@@ -218,34 +230,25 @@ const SoundwaveArea = ({status,micActive,analyser}) => {
         }
         ctx.beginPath();ctx.moveTo(0,cy)
         for(let x=1;x<W;x++){const noise=(Math.random()-.5)*(status==='offline'?1.8:.4);ctx.lineTo(x,cy+noise)}
-        ctx.stroke()
-      }else if(micActive&&analyser){
-        const buf=analyser.frequencyBinCount,data=new Uint8Array(buf)
-        analyser.getByteTimeDomainData(data)
-        ctx.strokeStyle='rgba(255,255,255,0.95)';ctx.lineWidth=2.2;ctx.shadowColor='rgba(255,255,255,0.5)';ctx.shadowBlur=12
-        ctx.beginPath()
-        for(let i=0;i<buf;i++){const x=(i/buf)*W,v=(data[i]/128)-1,y=cy+v*(H*.42);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y)}
-        ctx.stroke()
-      }else if(micActive){
-        ctx.strokeStyle='rgba(255,255,255,0.9)';ctx.lineWidth=2.2;ctx.shadowColor='rgba(255,255,255,0.4)';ctx.shadowBlur=10
-        ctx.beginPath()
-        for(let x=0;x<W;x++){
-          const p=x/W,y=cy+Math.sin(p*Math.PI*9+t*3.8)*(H*.26)+Math.sin(p*Math.PI*22+t*5.5)*(H*.10)+Math.sin(p*Math.PI*4+t*1.9)*(H*.17)+Math.sin(p*Math.PI*40+t*7.2)*(H*.04)
-          x===0?ctx.moveTo(x,y):ctx.lineTo(x,y)
-        }
-        ctx.stroke();tRef.current+=.09
+        ctx.stroke();tRef.current+=.04
       }else if(analyser){
         const buf=analyser.frequencyBinCount,data=new Uint8Array(buf)
         analyser.getByteTimeDomainData(data)
-        ctx.strokeStyle='rgba(255,255,255,0.68)';ctx.lineWidth=1.8;ctx.shadowColor='rgba(255,255,255,0.2)';ctx.shadowBlur=6
+        ctx.strokeStyle='rgba(255,255,255,0.92)';ctx.lineWidth=2.2
+        ctx.shadowColor='rgba(255,255,255,0.45)';ctx.shadowBlur=10
         ctx.beginPath()
-        for(let i=0;i<buf;i++){const x=(i/buf)*W,v=(data[i]/128)-1,y=cy+v*(H*.40);i===0?ctx.moveTo(x,y):ctx.lineTo(x,y)}
+        for(let i=0;i<buf;i++){
+          const x=(i/buf)*W,v=(data[i]/128)-1,y=cy+v*(H*.44)
+          i===0?ctx.moveTo(x,y):ctx.lineTo(x,y)
+        }
         ctx.stroke();tRef.current+=.005
       }else{
-        ctx.strokeStyle='rgba(255,255,255,0.55)';ctx.lineWidth=1.8;ctx.shadowColor='rgba(255,255,255,0.15)';ctx.shadowBlur=5
+        ctx.strokeStyle='rgba(255,255,255,0.55)';ctx.lineWidth=1.8
+        ctx.shadowColor='rgba(255,255,255,0.15)';ctx.shadowBlur=5
         ctx.beginPath()
         for(let x=0;x<W;x++){
-          const p=x/W,y=cy+Math.sin(p*Math.PI*6+t)*(H*.13)+Math.sin(p*Math.PI*14+t*1.55)*(H*.07)+Math.sin(p*Math.PI*3+t*.52)*(H*.10)+Math.sin(p*Math.PI*24+t*2.4)*(H*.03)+Math.sin(p*Math.PI*1.5+t*.28)*(H*.06)
+          const p=x/W
+          const y=cy+Math.sin(p*Math.PI*6+t)*(H*.13)+Math.sin(p*Math.PI*14+t*1.55)*(H*.07)+Math.sin(p*Math.PI*3+t*.52)*(H*.10)+Math.sin(p*Math.PI*24+t*2.4)*(H*.03)+Math.sin(p*Math.PI*1.5+t*.28)*(H*.06)
           x===0?ctx.moveTo(x,y):ctx.lineTo(x,y)
         }
         ctx.stroke();tRef.current+=.028
@@ -254,7 +257,7 @@ const SoundwaveArea = ({status,micActive,analyser}) => {
     }
     draw()
     return()=>{cancelAnimationFrame(animRef.current);ro.disconnect()}
-  },[status,micActive,analyser])
+  },[status,analyser])
 
   const isLive=status==='live'
   return(
@@ -274,9 +277,14 @@ const SoundwaveArea = ({status,micActive,analyser}) => {
         </div>
       )}
       {isLive&&(
-        <div style={{position:'absolute',bottom:8,left:10,zIndex:5,display:'flex',alignItems:'center',gap:5}}>
-          <div style={{width:5,height:5,borderRadius:'50%',background:micActive?'#ffffff':'rgba(255,255,255,.35)',animation:micActive?'tx-dot .55s infinite':'none'}}/>
-          <span style={{fontFamily:'monospace',fontSize:9,letterSpacing:'.1em',color:micActive?'rgba(255,255,255,.75)':'rgba(255,255,255,.32)'}}>{micActive?'TX · TRANSMITTING':'RX · RECEIVING'}</span>
+        <div style={{position:'absolute',bottom:8,left:10,zIndex:5,display:'flex',alignItems:'center',gap:6}}>
+          {/* EQ bars animasi saat live */}
+          <div style={{display:'flex',alignItems:'flex-end',gap:2,height:16}}>
+            {['eq1','eq2','eq3','eq2','eq1'].map((a,i)=>(
+              <div key={i} style={{width:3,borderRadius:2,background:'rgba(255,255,255,0.6)',animation:`${a} ${0.6+i*0.1}s ease-in-out infinite`,animationDelay:`${i*0.08}s`}}/>
+            ))}
+          </div>
+          <span style={{fontFamily:'monospace',fontSize:9,letterSpacing:'.1em',color:'rgba(255,255,255,.5)'}}>RX · RECEIVING</span>
         </div>
       )}
       <div style={{position:'absolute',top:8,right:10,zIndex:5,fontFamily:'monospace',fontSize:8,letterSpacing:'.12em',color:'rgba(255,255,255,.18)'}}>OSCILLOSCOPE</div>
@@ -288,7 +296,11 @@ const SoundwaveArea = ({status,micActive,analyser}) => {
 const Card = ({children,style={},onClick,p=20,radius=22}) => {
   const [hov,setHov]=useState(false)
   return(
-    <div onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)} style={{background:T.surf,borderRadius:radius,padding:p,boxShadow:hov?'0 14px 44px rgba(0,0,0,.11), 0 3px 10px rgba(0,0,0,.06)':'0 2px 16px rgba(0,0,0,.07), 0 1px 3px rgba(0,0,0,.04)',transition:'box-shadow .25s, transform .25s',transform:hov&&onClick?'translateY(-2px)':'none',cursor:onClick?'pointer':'default',...style}}>
+    <div onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
+      style={{background:T.surf,borderRadius:radius,padding:p,
+        boxShadow:hov?'0 14px 44px rgba(0,0,0,.11), 0 3px 10px rgba(0,0,0,.06)':'0 2px 16px rgba(0,0,0,.07), 0 1px 3px rgba(0,0,0,.04)',
+        transition:'box-shadow .25s, transform .25s',transform:hov&&onClick?'translateY(-2px)':'none',
+        cursor:onClick?'pointer':'default',...style}}>
       {children}
     </div>
   )
@@ -305,32 +317,39 @@ const StatusBadge = ({status,fs=10}) => {
   return <span style={{background:s.bg,color:s.color,fontSize:fs,fontWeight:800,letterSpacing:'.1em',padding:'3px 9px',borderRadius:99,animation:s.anim,fontFamily:'monospace',whiteSpace:'nowrap'}}>{s.label}</span>
 }
 
-const MicButton = ({active,onStart,onEnd,disabled,sz=48,iconSz=18}) => (
-  <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:6,position:'relative'}}>
-    {active&&<div style={{position:'absolute',top:'50%',left:'50%',width:sz,height:sz,borderRadius:'50%',background:'rgba(17,17,17,.13)',animation:'pulse-ring .9s ease-out infinite',pointerEvents:'none'}}/>}
-    <button onMouseDown={onStart} onMouseUp={onEnd}
-      onTouchStart={e=>{e.preventDefault();onStart()}} onTouchEnd={e=>{e.preventDefault();onEnd()}}
-      disabled={disabled}
-      style={{width:sz,height:sz,borderRadius:'50%',border:active?'none':`2px solid ${T.borderD}`,background:active?T.dark:T.surf,color:active?'#fff':T.mid,display:'flex',alignItems:'center',justifyContent:'center',cursor:disabled?'not-allowed':'pointer',transition:'all .15s',outline:'none',flexShrink:0,boxShadow:active?'0 4px 22px rgba(0,0,0,.28)':'0 1px 4px rgba(0,0,0,.08)',opacity:disabled?.35:1,WebkitTapHighlightColor:'transparent',userSelect:'none'}}>
-      <Mic size={iconSz} strokeWidth={active?2.5:1.8}/>
-    </button>
-    <span style={{fontSize:9,fontWeight:700,letterSpacing:'.1em',textTransform:'uppercase',color:active?T.dark:T.muted,userSelect:'none'}}>{active?'TALKING…':disabled?'OFFLINE':'HOLD MIC'}</span>
-  </div>
-)
-
 const IconBtn = ({icon:Icon,onClick,danger=false,sz=32,title=''}) => {
   const [hov,setHov]=useState(false)
   return(
     <button onClick={onClick} title={title} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{width:sz,height:sz,borderRadius:sz*.32,flexShrink:0,border:`1.5px solid ${hov&&danger?'#FECACA':hov?T.borderD:T.border}`,background:hov&&danger?'#FEE2E2':hov?T.chip:'transparent',color:hov&&danger?T.offline:hov?T.dark:T.mid,display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',transition:'all .15s',outline:'none',WebkitTapHighlightColor:'transparent'}}>
+      style={{width:sz,height:sz,borderRadius:sz*.32,flexShrink:0,
+        border:`1.5px solid ${hov&&danger?'#FECACA':hov?T.borderD:T.border}`,
+        background:hov&&danger?'#FEE2E2':hov?T.chip:'transparent',
+        color:hov&&danger?T.offline:hov?T.dark:T.mid,
+        display:'flex',alignItems:'center',justifyContent:'center',
+        cursor:'pointer',transition:'all .15s',outline:'none',WebkitTapHighlightColor:'transparent'}}>
       <Icon size={sz*.43} strokeWidth={2}/>
     </button>
   )
 }
 
+// ── AUDIO QUALITY INDICATOR ──────────────────────────────────────
+const AudioQualityBar = ({status}) => {
+  if(status!=='live')return null
+  return(
+    <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:T.chip,borderRadius:10}}>
+      <Volume2 size={11} color={T.live} strokeWidth={2}/>
+      <span style={{fontSize:9,fontWeight:700,color:T.live,letterSpacing:'.08em',fontFamily:'monospace'}}>AUDIO ENHANCED</span>
+      <div style={{flex:1,height:3,borderRadius:99,background:T.border,overflow:'hidden'}}>
+        <div style={{height:'100%',width:'100%',background:`linear-gradient(to right,${T.live},#4ade80)`,borderRadius:99}}/>
+      </div>
+      <span style={{fontSize:9,color:T.muted,fontFamily:'monospace',letterSpacing:'.06em'}}>NR · EQ · COMP</span>
+    </div>
+  )
+}
+
 // ── CAMERA CARD ──────────────────────────────────────────────────
-const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser,micActive,onMicStart,onMicEnd}) => {
-  const{cardP,cardR,labelFS,metaFS,micSz,micIcon,isPhone}=vp
+const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser}) => {
+  const{cardP,cardR,labelFS,metaFS,isPhone}=vp
   const handleFullscreen=()=>{
     const el=document.getElementById(`card-${cam.id}`)
     if(!el)return
@@ -339,6 +358,7 @@ const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser,micActive,onMic
   }
   return(
     <div id={`card-${cam.id}`} style={{background:T.surf,borderRadius:cardR,overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 2px 16px rgba(0,0,0,.07), 0 1px 3px rgba(0,0,0,.04)'}}>
+      {/* Header */}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:`${cardP*.7}px ${cardP}px`,borderBottom:`1px solid ${T.border}`}}>
         <div style={{display:'flex',flexDirection:'column',gap:4,minWidth:0,flex:1,marginRight:8}}>
           <span className="fd" style={{fontSize:labelFS,fontWeight:800,color:T.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cam.label}</span>
@@ -354,32 +374,36 @@ const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser,micActive,onMic
           <IconBtn icon={Trash2} onClick={onDelete} danger sz={isPhone?34:30} title="Delete"/>
         </div>
       </div>
+
+      {/* Waveform */}
       <div style={{padding:`${cardP*.6}px ${cardP}px 0`}}>
-        <SoundwaveArea status={cam.status} micActive={micActive} analyser={analyser}/>
+        <SoundwaveArea status={cam.status} analyser={analyser}/>
       </div>
+
+      {/* URL bar */}
       <div style={{padding:`${cardP*.45}px ${cardP}px 0`}}>
         <div style={{background:T.chip,borderRadius:10,padding:'6px 10px',display:'flex',alignItems:'center',gap:6}}>
           {cam.url?<Wifi size={10} color={T.muted} strokeWidth={2} style={{flexShrink:0}}/>:<WifiOff size={10} color={T.muted} strokeWidth={2} style={{flexShrink:0}}/>}
           <span style={{fontFamily:'monospace',fontSize:9,color:T.muted,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',flex:1}}>{cam.url||'— no stream configured —'}</span>
         </div>
       </div>
-      <div style={{borderTop:`1px solid ${T.border}`,margin:`${cardP*.7}px 0 0`,padding:`${cardP*.8}px ${cardP}px ${cardP}px`,display:'flex',justifyContent:'center'}}>
-        <MicButton active={micActive} onStart={onMicStart} onEnd={onMicEnd} disabled={cam.status!=='live'} sz={micSz} iconSz={micIcon}/>
+
+      {/* Audio quality bar */}
+      <div style={{padding:`${cardP*.4}px ${cardP}px ${cardP}px`}}>
+        <AudioQualityBar status={cam.status}/>
       </div>
     </div>
   )
 }
 
 // ── CAMERA STREAM WRAPPER ────────────────────────────────────────
-const CameraStream = ({cam,vp,onEdit,onDelete,micActive,micAnalyser,onMicStart,onMicEnd}) => {
-  const{streamStatus,analyser:incomingAnalyser,reconnect}=useHlsAudio(cam.url)
+const CameraStream = ({cam,vp,onEdit,onDelete}) => {
+  const{streamStatus,analyser,reconnect}=useHlsAudio(cam.url)
   const effectiveStatus=cam.url?streamStatus:'idle'
   const effectiveCam={...cam,status:effectiveStatus}
-  const activeAnalyser=micActive?micAnalyser:incomingAnalyser
   return(
-    <CameraCard cam={effectiveCam} vp={vp} onEdit={onEdit} onDelete={onDelete} onReconnect={reconnect}
-      analyser={activeAnalyser} micActive={micActive}
-      onMicStart={()=>onMicStart(cam.id,cam.url)} onMicEnd={onMicEnd}/>
+    <CameraCard cam={effectiveCam} vp={vp} onEdit={onEdit} onDelete={onDelete}
+      onReconnect={reconnect} analyser={analyser}/>
   )
 }
 
@@ -391,8 +415,14 @@ const CamModal = ({show,cam,onClose,onSave,vp}) => {
   const{pad,headFS,isPhone,modalR}=vp
   const handleUrl=v=>{setUrl(v);setRtspWarn(v.trim().toLowerCase().startsWith('rtsp://'))}
   return(
-    <div onClick={e=>{if(e.target===e.currentTarget)onClose()}} style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,.4)',backdropFilter:'blur(6px)',display:'flex',alignItems:isPhone?'flex-end':'center',justifyContent:'center',padding:isPhone?0:20,animation:'fade-bg .2s ease'}}>
-      <div style={{width:'100%',maxWidth:isPhone?'100%':500,background:T.surf,borderRadius:modalR,padding:`${pad+8}px ${pad+4}px ${isPhone?40:pad+8}px`,animation:'slide-up .28s cubic-bezier(.34,1.3,.64,1)',maxHeight:isPhone?'92dvh':'auto',overflowY:'auto'}}>
+    <div onClick={e=>{if(e.target===e.currentTarget)onClose()}}
+      style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,.4)',backdropFilter:'blur(6px)',
+        display:'flex',alignItems:isPhone?'flex-end':'center',justifyContent:'center',
+        padding:isPhone?0:20,animation:'fade-bg .2s ease'}}>
+      <div style={{width:'100%',maxWidth:isPhone?'100%':500,background:T.surf,borderRadius:modalR,
+        padding:`${pad+8}px ${pad+4}px ${isPhone?40:pad+8}px`,
+        animation:'slide-up .28s cubic-bezier(.34,1.3,.64,1)',
+        maxHeight:isPhone?'92dvh':'auto',overflowY:'auto'}}>
         {isPhone&&<div style={{width:38,height:4,borderRadius:99,background:T.border,margin:'0 auto 20px'}}/>}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
           <span className="fd" style={{fontSize:headFS,fontWeight:800,color:T.dark}}>{cam?'Edit Camera':'Add Camera'}</span>
@@ -404,8 +434,11 @@ const CamModal = ({show,cam,onClose,onSave,vp}) => {
           onFocus={e=>e.target.style.borderColor=T.dark} onBlur={e=>e.target.style.borderColor=T.border}/>
         <label style={{fontSize:11,fontWeight:700,color:T.muted,letterSpacing:'.08em',textTransform:'uppercase',display:'block',marginBottom:6}}>HLS Stream URL (.m3u8)</label>
         <input value={url} onChange={e=>handleUrl(e.target.value)} placeholder="http://192.168.x.x:1984/api/stream.m3u8?src=gate_kasir"
-          style={{width:'100%',padding:'12px 14px',borderRadius:14,marginBottom:8,border:`1.5px solid ${rtspWarn?'#FCD34D':T.border}`,background:T.chip,fontSize:11,fontWeight:500,color:T.dark,outline:'none',fontFamily:'monospace'}}
-          onFocus={e=>e.target.style.borderColor=rtspWarn?'#FCD34D':T.dark} onBlur={e=>e.target.style.borderColor=rtspWarn?'#FCD34D':T.border}/>
+          style={{width:'100%',padding:'12px 14px',borderRadius:14,marginBottom:8,
+            border:`1.5px solid ${rtspWarn?'#FCD34D':T.border}`,background:T.chip,
+            fontSize:11,fontWeight:500,color:T.dark,outline:'none',fontFamily:'monospace'}}
+          onFocus={e=>e.target.style.borderColor=rtspWarn?'#FCD34D':T.dark}
+          onBlur={e=>e.target.style.borderColor=rtspWarn?'#FCD34D':T.border}/>
         {rtspWarn?(
           <div style={{background:'#FFFBEB',border:'1px solid #FCD34D',borderRadius:12,padding:'10px 12px',marginBottom:16}}>
             <p style={{fontSize:11,fontWeight:700,color:'#92400E',marginBottom:4}}>⚠ RTSP tidak bisa diputar langsung di browser</p>
@@ -416,7 +449,10 @@ const CamModal = ({show,cam,onClose,onSave,vp}) => {
         )}
         <div style={{display:'flex',gap:10}}>
           <button onClick={onClose} style={{flex:1,padding:'13px 0',borderRadius:14,border:`1.5px solid ${T.border}`,background:'transparent',fontSize:14,fontWeight:700,color:T.mid,cursor:'pointer'}}>Cancel</button>
-          <button onClick={()=>{if(label.trim()||url.trim())onSave({label,url})}} style={{flex:2,padding:'13px 0',borderRadius:14,border:'none',background:T.dark,color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',boxShadow:'0 4px 16px rgba(0,0,0,.2)'}}>{cam?'Save Changes':'Add Camera'}</button>
+          <button onClick={()=>{if(label.trim()||url.trim())onSave({label,url})}}
+            style={{flex:2,padding:'13px 0',borderRadius:14,border:'none',background:T.dark,color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',boxShadow:'0 4px 16px rgba(0,0,0,.2)'}}>
+            {cam?'Save Changes':'Add Camera'}
+          </button>
         </div>
       </div>
     </div>
@@ -424,10 +460,14 @@ const CamModal = ({show,cam,onClose,onSave,vp}) => {
 }
 
 const DeleteConfirm = ({cam,onConfirm,onCancel}) => (
-  <div onClick={e=>{if(e.target===e.currentTarget)onCancel()}} style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,.4)',backdropFilter:'blur(6px)',display:'flex',alignItems:'center',justifyContent:'center',padding:20,animation:'fade-bg .15s ease'}}>
+  <div onClick={e=>{if(e.target===e.currentTarget)onCancel()}}
+    style={{position:'fixed',inset:0,zIndex:200,background:'rgba(0,0,0,.4)',backdropFilter:'blur(6px)',
+      display:'flex',alignItems:'center',justifyContent:'center',padding:20,animation:'fade-bg .15s ease'}}>
     <Card p={28} radius={22} style={{width:'100%',maxWidth:340,animation:'fade-in .2s ease'}}>
       <div style={{textAlign:'center',marginBottom:22}}>
-        <div style={{width:52,height:52,borderRadius:16,background:'#FEE2E2',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}><Trash2 size={22} color={T.offline} strokeWidth={2}/></div>
+        <div style={{width:52,height:52,borderRadius:16,background:'#FEE2E2',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
+          <Trash2 size={22} color={T.offline} strokeWidth={2}/>
+        </div>
         <p className="fd" style={{fontSize:18,fontWeight:800,color:T.dark,marginBottom:6}}>Hapus Kamera?</p>
         <p style={{fontSize:13,color:T.mid,lineHeight:1.6}}><strong>{cam?.label}</strong> akan dihapus dari dashboard.</p>
       </div>
@@ -439,24 +479,11 @@ const DeleteConfirm = ({cam,onConfirm,onCancel}) => (
   </div>
 )
 
-const MicBanner = ({onGrant,onDismiss}) => (
-  <Card p={16} radius={16} style={{background:'#FFFBEB',border:'1.5px solid #E9D8A6',display:'flex',gap:12,alignItems:'flex-start',animation:'slide-up .3s ease'}}>
-    <div style={{width:36,height:36,borderRadius:12,background:'#FEF3C7',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><AlertCircle size={18} color="#D97706" strokeWidth={2}/></div>
-    <div style={{flex:1,minWidth:0}}>
-      <p style={{fontSize:13,fontWeight:700,color:'#92400E',marginBottom:3}}>Izin Mikrofon Diperlukan</p>
-      <p style={{fontSize:12,color:'#B45309',lineHeight:1.6}}>Untuk Push-to-Talk ke kamera, izinkan akses mikrofon perangkat ini.</p>
-      <div style={{display:'flex',gap:8,marginTop:10,flexWrap:'wrap'}}>
-        <button onClick={onGrant} style={{padding:'7px 16px',borderRadius:99,border:'none',background:'#92400E',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>Izinkan Mikrofon</button>
-        <button onClick={onDismiss} style={{padding:'7px 14px',borderRadius:99,border:'1px solid #D97706',background:'transparent',color:'#92400E',fontSize:12,fontWeight:600,cursor:'pointer'}}>Nanti</button>
-      </div>
-    </div>
-    <button onClick={onDismiss} style={{background:'none',border:'none',color:'#B45309',cursor:'pointer',padding:4,flexShrink:0}}><X size={14}/></button>
-  </Card>
-)
-
 const EmptyState = ({onAdd}) => (
   <Card p={48} radius={22} style={{textAlign:'center',gridColumn:'1/-1'}}>
-    <div style={{width:64,height:64,borderRadius:20,background:T.chip,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 18px'}}><Mic size={28} color={T.muted} strokeWidth={1.5}/></div>
+    <div style={{width:64,height:64,borderRadius:20,background:T.chip,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 18px'}}>
+      <Mic size={28} color={T.muted} strokeWidth={1.5}/>
+    </div>
     <p className="fd" style={{fontSize:20,fontWeight:800,color:T.dark,marginBottom:7}}>Belum Ada Kamera</p>
     <p style={{fontSize:13,color:T.muted,lineHeight:1.65,maxWidth:280,margin:'0 auto 22px'}}>Tambahkan kamera untuk mulai monitoring audio gate hotel.</p>
     <button onClick={onAdd} style={{padding:'12px 28px',borderRadius:14,border:'none',background:T.dark,color:'#fff',fontSize:14,fontWeight:700,cursor:'pointer',boxShadow:'0 4px 16px rgba(0,0,0,.18)'}}>+ Add Camera</button>
@@ -476,7 +503,7 @@ const DeviceChip = ({vp}) => {
 
 const InfoBar = ({cameras}) => {
   const live=cameras.filter(c=>c.url).length
-  const items=[['Active',`${live}/${cameras.length}`,T.live],['Protocol','HLS via go2rtc',T.dark],['Audio TX','WebRTC PTT',T.dark],['Network','Local LAN',T.dark]]
+  const items=[['Active',`${live}/${cameras.length}`,T.live],['Protocol','HLS via go2rtc',T.dark],['Audio','Enhanced',T.live],['Filters','NR · EQ · COMP',T.dark]]
   return(
     <Card p={12} radius={14} style={{background:T.surfD,boxShadow:'none',border:`1px solid ${T.border}`}}>
       <div style={{display:'flex',flexWrap:'wrap',gap:'8px 24px'}}>
@@ -494,7 +521,7 @@ const InfoBar = ({cameras}) => {
 // ── APP ROOT ─────────────────────────────────────────────────────
 let _id=2
 const nextId=()=>`CAM-${String(++_id).padStart(2,'0')}`
-const STORAGE_KEY='kedaton_cameras_v1'
+const STORAGE_KEY='kedaton_cameras_v2'
 const loadCameras=()=>{
   try{const raw=localStorage.getItem(STORAGE_KEY);if(raw)return JSON.parse(raw)}catch{}
   return[{id:'CAM-01',label:'GATE KASIR',url:''},{id:'CAM-02',label:'GATE NON-KASIR',url:''}]
@@ -504,50 +531,19 @@ export default function App() {
   const vp=useVP()
   const [cameras,setCameras]=useState(loadCameras)
   const [modal,setModal]=useState(null)
-  const [activeMicId,setActiveMicId]=useState(null)
-  const [showMicPerm,setShowMicPerm]=useState(true)
-  const [micGranted,setMicGranted]=useState(false)
-  const [micAnalyser,setMicAnalyser]=useState(null)
-  const micStreamRef=useRef(null)
-  const {startTalk,stopTalk}=useWebRTCTalk()
+  const{pad,gap,cols,headFS,isPhone}=vp
 
   useEffect(()=>{try{localStorage.setItem(STORAGE_KEY,JSON.stringify(cameras))}catch{}},[cameras])
-
-  const requestMicPermission=async()=>{
-    try{
-      const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false})
-      const ctx=new(window.AudioContext||window.webkitAudioContext)()
-      const src=ctx.createMediaStreamSource(stream)
-      const node=ctx.createAnalyser();node.fftSize=2048;node.smoothingTimeConstant=0.78
-      src.connect(node)
-      micStreamRef.current=stream;setMicAnalyser(node);setMicGranted(true);setShowMicPerm(false)
-      stream.getAudioTracks().forEach(t=>{t.enabled=false})
-    }catch{alert('Akses mikrofon ditolak. Cek pengaturan browser.')}
-  }
-
-  const handleMicStart=async(camId,hlsUrl)=>{
-    if(!micGranted){setShowMicPerm(true);return}
-    micStreamRef.current?.getAudioTracks().forEach(t=>{t.enabled=true})
-    if(hlsUrl)await startTalk(hlsUrl,micStreamRef.current)
-    setActiveMicId(camId)
-  }
-
-  const handleMicEnd=()=>{
-    micStreamRef.current?.getAudioTracks().forEach(t=>{t.enabled=false})
-    setActiveMicId(null)
-    stopTalk()
-  }
 
   const addCam=({label,url})=>{const id=nextId();setCameras(cs=>[...cs,{id,label:label.toUpperCase()||id,url:url.trim()}]);setModal(null)}
   const editCam=({label,url})=>{setCameras(cs=>cs.map(c=>c.id===modal.cam.id?{...c,label:label.toUpperCase(),url:url.trim()}:c));setModal(null)}
   const deleteCam=(id)=>{setCameras(cs=>cs.filter(c=>c.id!==id));setModal(null)}
 
-  const{pad,gap,cols,headFS,isPhone}=vp
-
   return(
     <>
       <GlobalStyles/>
       <div style={{minHeight:'100dvh',background:T.bg,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
+        {/* Header */}
         <div style={{background:T.surf,borderBottom:`1px solid ${T.border}`,boxShadow:'0 2px 16px rgba(0,0,0,.05)',padding:`${isPhone?12:16}px ${pad+4}px`,position:'sticky',top:0,zIndex:100}}>
           <div style={{maxWidth:1200,margin:'0 auto',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
             <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
@@ -560,17 +556,22 @@ export default function App() {
               </div>
             </div>
             {!isPhone&&<DeviceChip vp={vp}/>}
-            <button onClick={()=>setModal('add')} style={{display:'flex',alignItems:'center',gap:isPhone?0:7,background:T.dark,color:'#fff',border:'none',borderRadius:isPhone?10:12,padding:isPhone?'9px 12px':'9px 18px',cursor:'pointer',fontSize:13,fontWeight:700,flexShrink:0,boxShadow:'0 3px 12px rgba(0,0,0,.18)',WebkitTapHighlightColor:'transparent'}}>
+            <button onClick={()=>setModal('add')}
+              style={{display:'flex',alignItems:'center',gap:isPhone?0:7,background:T.dark,color:'#fff',border:'none',
+                borderRadius:isPhone?10:12,padding:isPhone?'9px 12px':'9px 18px',cursor:'pointer',
+                fontSize:13,fontWeight:700,flexShrink:0,boxShadow:'0 3px 12px rgba(0,0,0,.18)',WebkitTapHighlightColor:'transparent'}}>
               <Plus size={16} strokeWidth={2.5}/>
               {!isPhone&&'Add Camera'}
             </button>
           </div>
         </div>
+
+        {/* Content */}
         <div style={{maxWidth:1200,margin:'0 auto',padding:`${pad}px ${pad+4}px ${pad+24}px`}}>
-          {showMicPerm&&!micGranted&&<div style={{marginBottom:gap}}><MicBanner onGrant={requestMicPermission} onDismiss={()=>setShowMicPerm(false)}/></div>}
+          {/* Phone stats */}
           {isPhone&&cameras.length>0&&(
             <div style={{display:'flex',gap:8,marginBottom:gap}}>
-              {[['Cams',String(cameras.length),T.dark],['Protocol','HLS',T.dark],['Audio',micGranted?'PTT ✓':'PTT',micGranted?T.live:T.dark]].map(([k,v,c])=>(
+              {[['Cams',String(cameras.length),T.dark],['Protocol','HLS',T.dark],['Audio','Enhanced ✓',T.live]].map(([k,v,c])=>(
                 <div key={k} style={{flex:1,background:T.surf,borderRadius:12,padding:'10px 0',textAlign:'center',boxShadow:'0 1px 6px rgba(0,0,0,.06)'}}>
                   <div style={{fontSize:14,fontWeight:800,color:c,fontFamily:'monospace'}}>{v}</div>
                   <div style={{fontSize:9,color:T.muted,fontWeight:700,marginTop:2,letterSpacing:'.06em'}}>{k}</div>
@@ -578,25 +579,27 @@ export default function App() {
               ))}
             </div>
           )}
+
+          {/* Camera grid */}
           <div style={{display:'grid',gridTemplateColumns:`repeat(${cols},1fr)`,gap}}>
             {cameras.length===0
               ?<EmptyState onAdd={()=>setModal('add')}/>
               :cameras.map(cam=>(
                 <CameraStream key={cam.id} cam={cam} vp={vp}
                   onEdit={()=>setModal({type:'edit',cam})}
-                  onDelete={()=>setModal({type:'delete',cam})}
-                  micActive={activeMicId===cam.id}
-                  micAnalyser={activeMicId===cam.id?micAnalyser:null}
-                  onMicStart={handleMicStart}
-                  onMicEnd={handleMicEnd}/>
+                  onDelete={()=>setModal({type:'delete',cam})}/>
               ))
             }
           </div>
+
+          {/* Desktop info bar */}
           {!isPhone&&cameras.length>0&&<div style={{marginTop:gap}}><InfoBar cameras={cameras}/></div>}
           {isPhone&&<div style={{marginTop:gap,display:'flex',justifyContent:'center'}}><DeviceChip vp={vp}/></div>}
         </div>
       </div>
-      <CamModal show={modal==='add'||modal?.type==='edit'} cam={modal?.type==='edit'?modal.cam:null} onClose={()=>setModal(null)} onSave={modal?.type==='edit'?editCam:addCam} vp={vp}/>
+
+      <CamModal show={modal==='add'||modal?.type==='edit'} cam={modal?.type==='edit'?modal.cam:null}
+        onClose={()=>setModal(null)} onSave={modal?.type==='edit'?editCam:addCam} vp={vp}/>
       {modal?.type==='delete'&&<DeleteConfirm cam={modal.cam} onConfirm={()=>deleteCam(modal.cam.id)} onCancel={()=>setModal(null)}/>}
     </>
   )
