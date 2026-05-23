@@ -127,11 +127,11 @@ const useHlsAudio = (url) => {
       node.smoothingTimeConstant=0.82
 
       // ── COBA LOAD RNNOISE AI ──────────────────────────────────
-      let denoiser=null
+      let denoiseState=null
       try{
-        const createRNNoise=(await import('rnnoise-wasm')).default
-        const rnnoiseModule=await createRNNoise()
-        denoiser=new rnnoiseModule.RNNoise()
+        const { Rnnoise }=await import('@shiguredo/rnnoise-wasm')
+        const rnnoise=await Rnnoise.load()
+        denoiseState=rnnoise.createDenoiseState()
         setAiMode('active')
         console.log('[Audio] ✅ RNNoise AI loaded — neural noise suppression aktif!')
       }catch(e){
@@ -139,9 +139,9 @@ const useHlsAudio = (url) => {
         console.warn('[Audio] RNNoise tidak tersedia, pakai fallback filters')
       }
 
-      if(denoiser){
+      if(denoiseState){
         // ── AI PATH: RNNoise neural network ──────────────────────
-        // RNNoise: 480 samples per frame, 48kHz, float32 range ±32768
+        // RNNoise: 480 samples per frame, 48kHz, float32 range ±1.0
         const FRAME_SIZE=480
         const processor=ctx.createScriptProcessor(FRAME_SIZE,1,1)
         const frameBuffer=new Float32Array(FRAME_SIZE)
@@ -149,12 +149,10 @@ const useHlsAudio = (url) => {
         processor.onaudioprocess=(e)=>{
           const input=e.inputBuffer.getChannelData(0)
           const output=e.outputBuffer.getChannelData(0)
-          // Scale float32 [-1,1] → RNNoise range [-32768,32767]
-          for(let i=0;i<FRAME_SIZE;i++) frameBuffer[i]=input[i]*32768
-          // Neural network process — modifies frameBuffer in-place
-          denoiser.processFrame(frameBuffer)
-          // Scale back
-          for(let i=0;i<FRAME_SIZE;i++) output[i]=frameBuffer[i]/32768
+          frameBuffer.set(input)
+          // Neural network process — denoises in-place
+          denoiseState.processFrame(frameBuffer)
+          output.set(frameBuffer)
         }
 
         // Chain AI: src → HP → LP → RNNoise → gain → analyser → out
