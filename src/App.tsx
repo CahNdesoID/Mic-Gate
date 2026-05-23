@@ -25,6 +25,21 @@ const Maximize2 = ic("M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7")
 const Cpu       = ic("M12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0",{p2:"M2 12h3M19 12h3M12 2v3M12 19v3M6.34 6.34l2.12 2.12M15.54 15.54l2.12 2.12M6.34 17.66l2.12-2.12M15.54 8.46l2.12-2.12"})
 const Volume2   = ic("M11 5 6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07")
 
+// ── RNNOISE SINGLETON — preload sekali, pakai semua camera ────────
+// Load di background segera saat app start, sebelum stream connect
+// Jadi saat HLS konek, WASM sudah siap → tidak ada blocking → tidak disconnect
+let _rnnoisePromise = null
+const getRNNoise = () => {
+  if(!_rnnoisePromise){
+    _rnnoisePromise=import('@shiguredo/rnnoise-wasm')
+      .then(({Rnnoise})=>Rnnoise.load())
+      .catch(e=>{console.warn('[RNNoise] Failed to load:',e);return null})
+  }
+  return _rnnoisePromise
+}
+// Preload immediately saat app load — bukan saat stream connect
+if(typeof window!=='undefined') getRNNoise()
+
 // ── STYLES ──────────────────────────────────────────────────────
 const GlobalStyles = () => (
   <style>{`
@@ -127,16 +142,20 @@ const useHlsAudio = (url) => {
       node.smoothingTimeConstant=0.82
 
       // ── COBA LOAD RNNOISE AI ──────────────────────────────────
+      // Pakai singleton yang sudah preloaded — zero blocking, semua platform
       let denoiseState=null
       try{
-        const { Rnnoise }=await import('@shiguredo/rnnoise-wasm')
-        const rnnoise=await Rnnoise.load()
-        denoiseState=rnnoise.createDenoiseState()
-        setAiMode('active')
-        console.log('[Audio] ✅ RNNoise AI loaded — neural noise suppression aktif!')
+        const rnnoise=await getRNNoise()
+        if(rnnoise){
+          denoiseState=rnnoise.createDenoiseState()
+          setAiMode('active')
+          console.log('[Audio] ✅ RNNoise AI ready — semua platform!')
+        }else{
+          setAiMode('fallback')
+        }
       }catch(e){
         setAiMode('fallback')
-        console.warn('[Audio] RNNoise tidak tersedia, pakai fallback filters')
+        console.warn('[Audio] RNNoise fallback:',e)
       }
 
       if(denoiseState){
