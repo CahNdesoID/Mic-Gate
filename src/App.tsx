@@ -15,7 +15,6 @@ const Pencil    = ic("M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z")
 const Trash2    = ic("M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6")
 const Mic       = ic("M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z",{p2:"M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"})
 const X         = ic("M18 6 6 18M6 6l12 12")
-const AlertCircle = ic("M12 8v4M12 16h.01",{p2:"M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"})
 const Wifi      = ic("M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01")
 const WifiOff   = ic("M1 1l22 22M16.72 11.06A10.94 10.94 0 0 1 19 12.55M5 12.55a10.94 10.94 0 0 1 5.17-2.39M10.71 5.05A16 16 0 0 1 22.56 9M1.42 9a15.91 15.91 0 0 1 4.7-2.88M8.53 16.11a6 6 0 0 1 6.95 0M12 20h.01")
 const Monitor   = ic("M8 21h8M12 17v4",{p2:"M2 3h20a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"})
@@ -23,6 +22,7 @@ const Tablet    = ic("M12 18h.01",{p2:"M5 2h14a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H5a
 const Smartphone= ic("M12 18h.01",{p2:"M5 2h14a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"})
 const RefreshCw = ic("M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15")
 const Maximize2 = ic("M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7")
+const Cpu       = ic("M12 12m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0",{p2:"M2 12h3M19 12h3M12 2v3M12 19v3M6.34 6.34l2.12 2.12M15.54 15.54l2.12 2.12M6.34 17.66l2.12-2.12M15.54 8.46l2.12-2.12"})
 const Volume2   = ic("M11 5 6 9H2v6h4l5 4V5zM19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07")
 
 // ── STYLES ──────────────────────────────────────────────────────
@@ -44,6 +44,7 @@ const GlobalStyles = () => (
     @keyframes fade-bg{from{opacity:0}to{opacity:1}}
     @keyframes fade-in{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
     @keyframes spin{to{transform:rotate(360deg)}}
+    @keyframes ai-pulse{0%,100%{opacity:.4;transform:scale(1)}50%{opacity:1;transform:scale(1.08)}}
     @keyframes eq1{0%,100%{height:4px}50%{height:16px}}
     @keyframes eq2{0%,100%{height:12px}50%{height:4px}}
     @keyframes eq3{0%,100%{height:8px}50%{height:20px}}
@@ -59,6 +60,7 @@ const T = {
   offline:'#DC2626',offBg:'#FEE2E2',
   conn:'#D97706',connBg:'#FEF3C7',
   idle:'#888888',idleBg:'#F3F3F3',
+  ai:'#6366F1',aiBg:'#EEF2FF',
 }
 
 // ── RESPONSIVE HOOK ─────────────────────────────────────────────
@@ -85,10 +87,11 @@ const useVP = () => {
   return vp
 }
 
-// ── HLS AUDIO HOOK WITH FILTERS ─────────────────────────────────
+// ── HLS AUDIO HOOK WITH AI DENOISER ─────────────────────────────
 const useHlsAudio = (url) => {
   const [streamStatus,setStreamStatus]=useState('idle')
   const [analyser,setAnalyser]=useState(null)
+  const [aiMode,setAiMode]=useState('loading') // 'loading' | 'active' | 'fallback'
   const hlsRef=useRef(null),audioRef=useRef(null),audioCtxRef=useRef(null),retryRef=useRef(null)
 
   const cleanup=useCallback(()=>{
@@ -99,82 +102,104 @@ const useHlsAudio = (url) => {
     setAnalyser(null)
   },[])
 
-  const resumeCtx=(audio)=>{
+  const resumeCtx=async(audio)=>{
     try{
       const ctx=new(window.AudioContext||window.webkitAudioContext)()
       const src=ctx.createMediaElementSource(audio)
 
-      // High-pass AGRESIF 450Hz — bunuh mesin mobil (80-400Hz) + hujan rumble
-      // Vokal manusia mulai dari 500Hz keatas, aman dipotong di 450Hz
+      // Pre-filter sebelum AI
       const highPass=ctx.createBiquadFilter()
       highPass.type='highpass'
-      highPass.frequency.value=450
-      highPass.Q.value=1.4
+      highPass.frequency.value=300
+      highPass.Q.value=1.0
 
-      // High-pass kedua (cascade) — double cut mesin mobil, makin tajam
-      const highPass2=ctx.createBiquadFilter()
-      highPass2.type='highpass'
-      highPass2.frequency.value=450
-      highPass2.Q.value=1.4
-
-      // Low-pass 4000Hz — potong hujan deras (hiss di atas 4kHz)
       const lowPass=ctx.createBiquadFilter()
       lowPass.type='lowpass'
-      lowPass.frequency.value=4000
-      lowPass.Q.value=1.0
+      lowPass.frequency.value=4500
+      lowPass.Q.value=0.8
 
-      // Notch 50Hz — dengung PLN (backup, walau sudah di-highpass)
-      const notch=ctx.createBiquadFilter()
-      notch.type='notch'
-      notch.frequency.value=50
-      notch.Q.value=15
-
-      // SPEECH PRESENCE BOOST — 2500Hz-3500Hz = zona kejelasan vokal
-      // Ini yang bikin vokal "keluar" dan terdengar jelas
-      const presence=ctx.createBiquadFilter()
-      presence.type='peaking'
-      presence.frequency.value=3000
-      presence.gain.value=10
-      presence.Q.value=1.2
-
-      // Boost vokal 1500Hz — body suara manusia
-      const voiceBody=ctx.createBiquadFilter()
-      voiceBody.type='peaking'
-      voiceBody.frequency.value=1500
-      voiceBody.gain.value=6
-      voiceBody.Q.value=1.0
-
-      // Compressor sangat agresif — noise floor ditekan keras
-      // Saat sepi (noise): gain turun. Saat ada orang bicara: gain naik otomatis
-      const comp=ctx.createDynamicsCompressor()
-      comp.threshold.value=-35
-      comp.knee.value=4
-      comp.ratio.value=14
-      comp.attack.value=0.001
-      comp.release.value=0.08
-
-      // Gain boost — kompensasi setelah banyak frekuensi dipotong
+      // Post gain + analyser
       const gain=ctx.createGain()
-      gain.gain.value=2.2
+      gain.gain.value=2.0
 
-      // Analyser untuk oscilloscope
       const node=ctx.createAnalyser()
       node.fftSize=2048
       node.smoothingTimeConstant=0.82
 
-      // Chain:
-      // src → notch(50Hz) → HP(450Hz) → HP2(450Hz) → LP(4kHz)
-      //     → voiceBody(1.5kHz) → presence(3kHz) → comp → gain → analyser → out
-      src.connect(notch)
-      notch.connect(highPass)
-      highPass.connect(highPass2)
-      highPass2.connect(lowPass)
-      lowPass.connect(voiceBody)
-      voiceBody.connect(presence)
-      presence.connect(comp)
-      comp.connect(gain)
-      gain.connect(node)
-      node.connect(ctx.destination)
+      // ── COBA LOAD RNNOISE AI ──────────────────────────────────
+      let denoiser=null
+      try{
+        const createRNNoise=(await import('rnnoise-wasm')).default
+        const rnnoiseModule=await createRNNoise()
+        denoiser=new rnnoiseModule.RNNoise()
+        setAiMode('active')
+        console.log('[Audio] ✅ RNNoise AI loaded — neural noise suppression aktif!')
+      }catch(e){
+        setAiMode('fallback')
+        console.warn('[Audio] RNNoise tidak tersedia, pakai fallback filters')
+      }
+
+      if(denoiser){
+        // ── AI PATH: RNNoise neural network ──────────────────────
+        // RNNoise: 480 samples per frame, 48kHz, float32 range ±32768
+        const FRAME_SIZE=480
+        const processor=ctx.createScriptProcessor(FRAME_SIZE,1,1)
+        const frameBuffer=new Float32Array(FRAME_SIZE)
+
+        processor.onaudioprocess=(e)=>{
+          const input=e.inputBuffer.getChannelData(0)
+          const output=e.outputBuffer.getChannelData(0)
+          // Scale float32 [-1,1] → RNNoise range [-32768,32767]
+          for(let i=0;i<FRAME_SIZE;i++) frameBuffer[i]=input[i]*32768
+          // Neural network process — modifies frameBuffer in-place
+          denoiser.processFrame(frameBuffer)
+          // Scale back
+          for(let i=0;i<FRAME_SIZE;i++) output[i]=frameBuffer[i]/32768
+        }
+
+        // Chain AI: src → HP → LP → RNNoise → gain → analyser → out
+        src.connect(highPass)
+        highPass.connect(lowPass)
+        lowPass.connect(processor)
+        processor.connect(gain)
+        gain.connect(node)
+        node.connect(ctx.destination)
+
+      }else{
+        // ── FALLBACK PATH: Noise gate + EQ ───────────────────────
+        // Voice boost
+        const vowel=ctx.createBiquadFilter()
+        vowel.type='peaking';vowel.frequency.value=1000;vowel.gain.value=8;vowel.Q.value=0.9
+
+        const presence=ctx.createBiquadFilter()
+        presence.type='peaking';presence.frequency.value=2800;presence.gain.value=10;presence.Q.value=1.0
+
+        // Noise gate
+        const gate=ctx.createScriptProcessor(2048,1,1)
+        let gateGain=0
+        gate.onaudioprocess=(e)=>{
+          const inp=e.inputBuffer.getChannelData(0)
+          const out=e.outputBuffer.getChannelData(0)
+          let sum=0
+          for(let i=0;i<inp.length;i++) sum+=inp[i]*inp[i]
+          const rms=Math.sqrt(sum/inp.length)
+          const target=rms>0.012?1.0:0.0
+          gateGain+=(target-gateGain)*(target>gateGain?0.15:0.06)
+          for(let i=0;i<inp.length;i++) out[i]=inp[i]*gateGain
+        }
+
+        gain.gain.value=2.5
+
+        // Chain fallback: src → HP → LP → vowel → presence → gate → gain → analyser → out
+        src.connect(highPass)
+        highPass.connect(lowPass)
+        lowPass.connect(vowel)
+        vowel.connect(presence)
+        presence.connect(gate)
+        gate.connect(gain)
+        gain.connect(node)
+        node.connect(ctx.destination)
+      }
 
       audioCtxRef.current=ctx;setAnalyser(node)
     }catch(e){console.warn('[HLS] AudioContext failed:',e)}
@@ -187,23 +212,22 @@ const useHlsAudio = (url) => {
     if(Hls.isSupported()){
       const hls=new Hls({lowLatencyMode:true,backBufferLength:10,maxBufferLength:10,liveSyncDurationCount:2,enableWorker:true})
       hlsRef.current=hls;hls.loadSource(url);hls.attachMedia(audio)
-      hls.on(Hls.Events.MANIFEST_PARSED,()=>{resumeCtx(audio);audio.play().catch(()=>{});setStreamStatus('live')})
+      hls.on(Hls.Events.MANIFEST_PARSED,()=>{resumeCtx(audio).then(()=>audio.play().catch(()=>{}));setStreamStatus('live')})
       hls.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal){setStreamStatus('offline');retryRef.current=setTimeout(connect,5000)}})
     }else if(audio.canPlayType('application/vnd.apple.mpegurl')){
       audio.src=url
-      audio.addEventListener('loadedmetadata',()=>{resumeCtx(audio);audio.play().catch(()=>{});setStreamStatus('live')},{once:true})
+      audio.addEventListener('loadedmetadata',()=>{resumeCtx(audio).then(()=>audio.play().catch(()=>{}));setStreamStatus('live')},{once:true})
       audio.addEventListener('error',()=>{setStreamStatus('offline');retryRef.current=setTimeout(connect,5000)},{once:true})
     }else{setStreamStatus('offline')}
   },[url,cleanup])
 
   useEffect(()=>{connect();return cleanup},[connect])
-  return{streamStatus,analyser,reconnect:connect}
+  return{streamStatus,analyser,reconnect:connect,aiMode}
 }
 
 // ── SOUNDWAVE ───────────────────────────────────────────────────
 const SoundwaveArea = ({status,analyser}) => {
   const canvasRef=useRef(null),animRef=useRef(null),tRef=useRef(0),sizeRef=useRef({w:0,h:0})
-
   useEffect(()=>{
     const canvas=canvasRef.current;if(!canvas)return
     const dpr=window.devicePixelRatio||1
@@ -214,7 +238,6 @@ const SoundwaveArea = ({status,analyser}) => {
     })
     ro.observe(canvas)
     const ctx=canvas.getContext('2d')
-
     const drawGrid=(W,H)=>{
       ctx.save();ctx.strokeStyle='rgba(255,255,255,0.045)';ctx.lineWidth=1
       for(let i=1;i<4;i++){ctx.beginPath();ctx.moveTo(0,H*i/4);ctx.lineTo(W,H*i/4);ctx.stroke()}
@@ -223,14 +246,12 @@ const SoundwaveArea = ({status,analyser}) => {
       ctx.setLineDash([4,6]);ctx.beginPath();ctx.moveTo(0,H/2);ctx.lineTo(W,H/2);ctx.stroke()
       ctx.setLineDash([]);ctx.restore()
     }
-
     const draw=()=>{
       const{w:W,h:H}=sizeRef.current
       if(!W||!H){animRef.current=requestAnimationFrame(draw);return}
       ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H)
       const cy=H/2,t=tRef.current
       drawGrid(W,H);ctx.save();ctx.lineCap='round';ctx.lineJoin='round'
-
       if(status==='offline'||status==='idle'||status==='connecting'){
         ctx.strokeStyle=status==='connecting'?'rgba(255,255,255,0.22)':'rgba(255,255,255,0.17)';ctx.lineWidth=1.5
         if(status==='connecting'){
@@ -256,11 +277,10 @@ const SoundwaveArea = ({status,analyser}) => {
         ctx.stroke();tRef.current+=.005
       }else{
         ctx.strokeStyle='rgba(255,255,255,0.55)';ctx.lineWidth=1.8
-        ctx.shadowColor='rgba(255,255,255,0.15)';ctx.shadowBlur=5
         ctx.beginPath()
         for(let x=0;x<W;x++){
           const p=x/W
-          const y=cy+Math.sin(p*Math.PI*6+t)*(H*.13)+Math.sin(p*Math.PI*14+t*1.55)*(H*.07)+Math.sin(p*Math.PI*3+t*.52)*(H*.10)+Math.sin(p*Math.PI*24+t*2.4)*(H*.03)+Math.sin(p*Math.PI*1.5+t*.28)*(H*.06)
+          const y=cy+Math.sin(p*Math.PI*6+t)*(H*.13)+Math.sin(p*Math.PI*14+t*1.55)*(H*.07)+Math.sin(p*Math.PI*3+t*.52)*(H*.10)
           x===0?ctx.moveTo(x,y):ctx.lineTo(x,y)
         }
         ctx.stroke();tRef.current+=.028
@@ -290,7 +310,6 @@ const SoundwaveArea = ({status,analyser}) => {
       )}
       {isLive&&(
         <div style={{position:'absolute',bottom:8,left:10,zIndex:5,display:'flex',alignItems:'center',gap:6}}>
-          {/* EQ bars animasi saat live */}
           <div style={{display:'flex',alignItems:'flex-end',gap:2,height:16}}>
             {['eq1','eq2','eq3','eq2','eq1'].map((a,i)=>(
               <div key={i} style={{width:3,borderRadius:2,background:'rgba(255,255,255,0.6)',animation:`${a} ${0.6+i*0.1}s ease-in-out infinite`,animationDelay:`${i*0.08}s`}}/>
@@ -300,6 +319,29 @@ const SoundwaveArea = ({status,analyser}) => {
         </div>
       )}
       <div style={{position:'absolute',top:8,right:10,zIndex:5,fontFamily:'monospace',fontSize:8,letterSpacing:'.12em',color:'rgba(255,255,255,.18)'}}>OSCILLOSCOPE</div>
+    </div>
+  )
+}
+
+// ── AI MODE BADGE ────────────────────────────────────────────────
+const AIBadge = ({aiMode,status}) => {
+  if(status!=='live')return null
+  if(aiMode==='loading') return(
+    <div style={{display:'flex',alignItems:'center',gap:7,padding:'6px 10px',background:T.chip,borderRadius:10}}>
+      <div style={{width:10,height:10,borderRadius:'50%',border:`1.5px solid ${T.ai}`,borderTopColor:'transparent',animation:'spin .7s linear infinite'}}/>
+      <span style={{fontSize:9,fontWeight:700,color:T.muted,letterSpacing:'.08em',fontFamily:'monospace'}}>LOADING AI MODEL...</span>
+    </div>
+  )
+  if(aiMode==='active') return(
+    <div style={{display:'flex',alignItems:'center',gap:7,padding:'6px 10px',background:T.aiBg,borderRadius:10,border:`1px solid ${T.ai}30`}}>
+      <Cpu size={11} color={T.ai} strokeWidth={2} style={{animation:'ai-pulse 2s infinite'}}/>
+      <span style={{fontSize:9,fontWeight:800,color:T.ai,letterSpacing:'.08em',fontFamily:'monospace'}}>RNNoise AI · NEURAL DENOISER ACTIVE</span>
+    </div>
+  )
+  return(
+    <div style={{display:'flex',alignItems:'center',gap:7,padding:'6px 10px',background:T.chip,borderRadius:10}}>
+      <Volume2 size={11} color={T.live} strokeWidth={2}/>
+      <span style={{fontSize:9,fontWeight:700,color:T.live,letterSpacing:'.08em',fontFamily:'monospace'}}>NOISE GATE + EQ ACTIVE</span>
     </div>
   )
 }
@@ -344,23 +386,8 @@ const IconBtn = ({icon:Icon,onClick,danger=false,sz=32,title=''}) => {
   )
 }
 
-// ── AUDIO QUALITY INDICATOR ──────────────────────────────────────
-const AudioQualityBar = ({status}) => {
-  if(status!=='live')return null
-  return(
-    <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 10px',background:T.chip,borderRadius:10}}>
-      <Volume2 size={11} color={T.live} strokeWidth={2}/>
-      <span style={{fontSize:9,fontWeight:700,color:T.live,letterSpacing:'.08em',fontFamily:'monospace'}}>AUDIO ENHANCED</span>
-      <div style={{flex:1,height:3,borderRadius:99,background:T.border,overflow:'hidden'}}>
-        <div style={{height:'100%',width:'100%',background:`linear-gradient(to right,${T.live},#4ade80)`,borderRadius:99}}/>
-      </div>
-      <span style={{fontSize:9,color:T.muted,fontFamily:'monospace',letterSpacing:'.06em'}}>NR · EQ · COMP</span>
-    </div>
-  )
-}
-
 // ── CAMERA CARD ──────────────────────────────────────────────────
-const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser}) => {
+const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser,aiMode}) => {
   const{cardP,cardR,labelFS,metaFS,isPhone}=vp
   const handleFullscreen=()=>{
     const el=document.getElementById(`card-${cam.id}`)
@@ -370,7 +397,6 @@ const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser}) => {
   }
   return(
     <div id={`card-${cam.id}`} style={{background:T.surf,borderRadius:cardR,overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 2px 16px rgba(0,0,0,.07), 0 1px 3px rgba(0,0,0,.04)'}}>
-      {/* Header */}
       <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:`${cardP*.7}px ${cardP}px`,borderBottom:`1px solid ${T.border}`}}>
         <div style={{display:'flex',flexDirection:'column',gap:4,minWidth:0,flex:1,marginRight:8}}>
           <span className="fd" style={{fontSize:labelFS,fontWeight:800,color:T.dark,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{cam.label}</span>
@@ -386,23 +412,17 @@ const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser}) => {
           <IconBtn icon={Trash2} onClick={onDelete} danger sz={isPhone?34:30} title="Delete"/>
         </div>
       </div>
-
-      {/* Waveform */}
       <div style={{padding:`${cardP*.6}px ${cardP}px 0`}}>
         <SoundwaveArea status={cam.status} analyser={analyser}/>
       </div>
-
-      {/* URL bar */}
       <div style={{padding:`${cardP*.45}px ${cardP}px 0`}}>
         <div style={{background:T.chip,borderRadius:10,padding:'6px 10px',display:'flex',alignItems:'center',gap:6}}>
           {cam.url?<Wifi size={10} color={T.muted} strokeWidth={2} style={{flexShrink:0}}/>:<WifiOff size={10} color={T.muted} strokeWidth={2} style={{flexShrink:0}}/>}
           <span style={{fontFamily:'monospace',fontSize:9,color:T.muted,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',flex:1}}>{cam.url||'— no stream configured —'}</span>
         </div>
       </div>
-
-      {/* Audio quality bar */}
       <div style={{padding:`${cardP*.4}px ${cardP}px ${cardP}px`}}>
-        <AudioQualityBar status={cam.status}/>
+        <AIBadge aiMode={aiMode} status={cam.status}/>
       </div>
     </div>
   )
@@ -410,12 +430,12 @@ const CameraCard = ({cam,vp,onEdit,onDelete,onReconnect,analyser}) => {
 
 // ── CAMERA STREAM WRAPPER ────────────────────────────────────────
 const CameraStream = ({cam,vp,onEdit,onDelete}) => {
-  const{streamStatus,analyser,reconnect}=useHlsAudio(cam.url)
+  const{streamStatus,analyser,reconnect,aiMode}=useHlsAudio(cam.url)
   const effectiveStatus=cam.url?streamStatus:'idle'
   const effectiveCam={...cam,status:effectiveStatus}
   return(
     <CameraCard cam={effectiveCam} vp={vp} onEdit={onEdit} onDelete={onDelete}
-      onReconnect={reconnect} analyser={analyser}/>
+      onReconnect={reconnect} analyser={analyser} aiMode={aiMode}/>
   )
 }
 
@@ -433,8 +453,7 @@ const CamModal = ({show,cam,onClose,onSave,vp}) => {
         padding:isPhone?0:20,animation:'fade-bg .2s ease'}}>
       <div style={{width:'100%',maxWidth:isPhone?'100%':500,background:T.surf,borderRadius:modalR,
         padding:`${pad+8}px ${pad+4}px ${isPhone?40:pad+8}px`,
-        animation:'slide-up .28s cubic-bezier(.34,1.3,.64,1)',
-        maxHeight:isPhone?'92dvh':'auto',overflowY:'auto'}}>
+        animation:'slide-up .28s cubic-bezier(.34,1.3,.64,1)',maxHeight:isPhone?'92dvh':'auto',overflowY:'auto'}}>
         {isPhone&&<div style={{width:38,height:4,borderRadius:99,background:T.border,margin:'0 auto 20px'}}/>}
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:20}}>
           <span className="fd" style={{fontSize:headFS,fontWeight:800,color:T.dark}}>{cam?'Edit Camera':'Add Camera'}</span>
@@ -447,8 +466,7 @@ const CamModal = ({show,cam,onClose,onSave,vp}) => {
         <label style={{fontSize:11,fontWeight:700,color:T.muted,letterSpacing:'.08em',textTransform:'uppercase',display:'block',marginBottom:6}}>HLS Stream URL (.m3u8)</label>
         <input value={url} onChange={e=>handleUrl(e.target.value)} placeholder="http://192.168.x.x:1984/api/stream.m3u8?src=gate_kasir"
           style={{width:'100%',padding:'12px 14px',borderRadius:14,marginBottom:8,
-            border:`1.5px solid ${rtspWarn?'#FCD34D':T.border}`,background:T.chip,
-            fontSize:11,fontWeight:500,color:T.dark,outline:'none',fontFamily:'monospace'}}
+            border:`1.5px solid ${rtspWarn?'#FCD34D':T.border}`,background:T.chip,fontSize:11,fontWeight:500,color:T.dark,outline:'none',fontFamily:'monospace'}}
           onFocus={e=>e.target.style.borderColor=rtspWarn?'#FCD34D':T.dark}
           onBlur={e=>e.target.style.borderColor=rtspWarn?'#FCD34D':T.border}/>
         {rtspWarn?(
@@ -515,7 +533,7 @@ const DeviceChip = ({vp}) => {
 
 const InfoBar = ({cameras}) => {
   const live=cameras.filter(c=>c.url).length
-  const items=[['Active',`${live}/${cameras.length}`,T.live],['Protocol','HLS via go2rtc',T.dark],['Audio','Enhanced',T.live],['Filters','NR · EQ · COMP',T.dark]]
+  const items=[['Active',`${live}/${cameras.length}`,T.live],['Protocol','HLS',T.dark],['AI','RNNoise',T.ai],['Denoiser','Neural Net',T.ai]]
   return(
     <Card p={12} radius={14} style={{background:T.surfD,boxShadow:'none',border:`1px solid ${T.border}`}}>
       <div style={{display:'flex',flexWrap:'wrap',gap:'8px 24px'}}>
@@ -555,7 +573,6 @@ export default function App() {
     <>
       <GlobalStyles/>
       <div style={{minHeight:'100dvh',background:T.bg,fontFamily:"'Plus Jakarta Sans',sans-serif"}}>
-        {/* Header */}
         <div style={{background:T.surf,borderBottom:`1px solid ${T.border}`,boxShadow:'0 2px 16px rgba(0,0,0,.05)',padding:`${isPhone?12:16}px ${pad+4}px`,position:'sticky',top:0,zIndex:100}}>
           <div style={{maxWidth:1200,margin:'0 auto',display:'flex',alignItems:'center',justifyContent:'space-between',gap:12}}>
             <div style={{display:'flex',alignItems:'center',gap:10,minWidth:0}}>
@@ -577,13 +594,10 @@ export default function App() {
             </button>
           </div>
         </div>
-
-        {/* Content */}
         <div style={{maxWidth:1200,margin:'0 auto',padding:`${pad}px ${pad+4}px ${pad+24}px`}}>
-          {/* Phone stats */}
           {isPhone&&cameras.length>0&&(
             <div style={{display:'flex',gap:8,marginBottom:gap}}>
-              {[['Cams',String(cameras.length),T.dark],['Protocol','HLS',T.dark],['Audio','Enhanced ✓',T.live]].map(([k,v,c])=>(
+              {[['Cams',String(cameras.length),T.dark],['Protocol','HLS',T.dark],['AI','RNNoise ✓',T.ai]].map(([k,v,c])=>(
                 <div key={k} style={{flex:1,background:T.surf,borderRadius:12,padding:'10px 0',textAlign:'center',boxShadow:'0 1px 6px rgba(0,0,0,.06)'}}>
                   <div style={{fontSize:14,fontWeight:800,color:c,fontFamily:'monospace'}}>{v}</div>
                   <div style={{fontSize:9,color:T.muted,fontWeight:700,marginTop:2,letterSpacing:'.06em'}}>{k}</div>
@@ -591,8 +605,6 @@ export default function App() {
               ))}
             </div>
           )}
-
-          {/* Camera grid */}
           <div style={{display:'grid',gridTemplateColumns:`repeat(${cols},1fr)`,gap}}>
             {cameras.length===0
               ?<EmptyState onAdd={()=>setModal('add')}/>
@@ -603,13 +615,10 @@ export default function App() {
               ))
             }
           </div>
-
-          {/* Desktop info bar */}
           {!isPhone&&cameras.length>0&&<div style={{marginTop:gap}}><InfoBar cameras={cameras}/></div>}
           {isPhone&&<div style={{marginTop:gap,display:'flex',justifyContent:'center'}}><DeviceChip vp={vp}/></div>}
         </div>
       </div>
-
       <CamModal show={modal==='add'||modal?.type==='edit'} cam={modal?.type==='edit'?modal.cam:null}
         onClose={()=>setModal(null)} onSave={modal?.type==='edit'?editCam:addCam} vp={vp}/>
       {modal?.type==='delete'&&<DeleteConfirm cam={modal.cam} onConfirm={()=>deleteCam(modal.cam.id)} onCancel={()=>setModal(null)}/>}
