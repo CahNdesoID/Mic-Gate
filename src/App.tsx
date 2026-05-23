@@ -142,17 +142,22 @@ const useHlsAudio = (url) => {
       if(denoiseState){
         // ── AI PATH: RNNoise neural network ──────────────────────
         // RNNoise: 480 samples per frame, 48kHz, float32 range ±1.0
+        // Buffer 4096 — kurangi frekuensi callback biar CPU tidak overload
+        // RNNoise butuh 480 samples per frame, kita proses 8 frame per callback
         const FRAME_SIZE=480
-        const processor=ctx.createScriptProcessor(FRAME_SIZE,1,1)
+        const BUFFER_SIZE=4096
+        const processor=ctx.createScriptProcessor(BUFFER_SIZE,1,1)
         const frameBuffer=new Float32Array(FRAME_SIZE)
 
         processor.onaudioprocess=(e)=>{
           const input=e.inputBuffer.getChannelData(0)
           const output=e.outputBuffer.getChannelData(0)
-          frameBuffer.set(input)
-          // Neural network process — denoises in-place
-          denoiseState.processFrame(frameBuffer)
-          output.set(frameBuffer)
+          // Proses per 480-sample chunk
+          for(let offset=0;offset+FRAME_SIZE<=BUFFER_SIZE;offset+=FRAME_SIZE){
+            for(let i=0;i<FRAME_SIZE;i++) frameBuffer[i]=input[offset+i]
+            denoiseState.processFrame(frameBuffer)
+            for(let i=0;i<FRAME_SIZE;i++) output[offset+i]=frameBuffer[i]
+          }
         }
 
         // Chain AI: src → HP → LP → RNNoise → gain → analyser → out
@@ -208,7 +213,7 @@ const useHlsAudio = (url) => {
     cleanup();setStreamStatus('connecting')
     const audio=new Audio();audio.crossOrigin='anonymous';audio.volume=1;audioRef.current=audio
     if(Hls.isSupported()){
-      const hls=new Hls({lowLatencyMode:true,backBufferLength:10,maxBufferLength:10,liveSyncDurationCount:2,enableWorker:true})
+      const hls=new Hls({lowLatencyMode:false,backBufferLength:30,maxBufferLength:30,liveSyncDurationCount:3,enableWorker:true,fragLoadingTimeOut:20000,manifestLoadingTimeOut:20000,levelLoadingTimeOut:20000})
       hlsRef.current=hls;hls.loadSource(url);hls.attachMedia(audio)
       hls.on(Hls.Events.MANIFEST_PARSED,()=>{resumeCtx(audio).then(()=>audio.play().catch(()=>{}));setStreamStatus('live')})
       hls.on(Hls.Events.ERROR,(_,data)=>{if(data.fatal){setStreamStatus('offline');retryRef.current=setTimeout(connect,5000)}})
